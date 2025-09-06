@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>FileOpener</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- Library SheetJS untuk Excel/CSV -->
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<!-- Library PDF.js untuk PDF -->
+<script src="https://mozilla.github.io/pdf.js/build/pdf.js"></script>
+</head>
+<body>
+<header><h1>FileOpener</h1></header>
+
+<!-- Area Drag & Drop -->
+<div id="drop-area" tabindex="0" role="button" aria-label="Drop area untuk file. Klik atau seret file ke sini.">
+  <p>Drag & Drop file di sini atau <button id="file-input-button">Pilih File</button></p>
+  <input type="file" id="file-input" multiple style="display:none">
+  <!-- Tombol Sampel (Demo) -->
+  <div id="sample-buttons">
+    <button id="sample-pdf">Contoh PDF</button>
+    <button id="sample-excel">Contoh CSV</button>
+    <button id="sample-image">Contoh Gambar</button>
+    <button id="sample-text">Contoh Teks</button>
+  </div>
+</div>
+
+<!-- Konten Utama: Sidebar File List dan Area Preview -->
+<div id="main-area">
+  <!-- Sidebar File List -->
+  <div id="sidebar">
+    <h2>File Loaded</h2>
+    <ul id="file-list"></ul>
+  </div>
+  <!-- Area Preview & Info File -->
+  <div id="preview-container">
+    <div id="preview-area" aria-live="polite"></div>
+    <div id="file-info"></div>
+  </div>
+</div>
+
+<style>
+  body { margin:0; font-family: Arial, sans-serif; background: #f2f2f2; color: #333; }
+  header { background: #4a76a8; color: white; padding: 1rem; text-align: center; }
+  #drop-area { margin: 1rem; padding: 2rem; border: 2px dashed #ccc; border-radius: 8px;
+               background: white; text-align: center; transition: background 0.3s; }
+  #drop-area.hover { background: #e8f0fe; }
+  #drop-area p { margin: 0; font-size: 1rem; }
+  #file-input-button { padding: 0.5rem 1rem; margin-left:5px; cursor: pointer; }
+  #sample-buttons { margin-top: 1rem; }
+  #sample-buttons button { margin: 0.2rem; padding: 0.5rem 1rem; }
+  #main-area { display: flex; flex-wrap: wrap; margin: 1rem; }
+  #sidebar { flex: 0 0 200px; background: #fff; border: 1px solid #ccc; border-radius: 4px;
+             padding: 1rem; margin-right: 1rem; height: fit-content; }
+  #sidebar h2 { margin-top: 0; }
+  #file-list { list-style: none; padding: 0; margin: 0; }
+  #file-list li { margin: 0.5rem 0; }
+  #file-list button { width: 100%; text-align: left; background: none; border: none; 
+                     padding: 0.2rem; font-size: 0.95rem; cursor: pointer; }
+  #file-list button.active { background: #d0e1fd; }
+  #file-list button:focus { outline: 2px solid #4a76a8; }
+  #preview-container { flex: 1; background: #fff; border: 1px solid #ccc; border-radius: 4px;
+                       padding: 1rem; min-width: 300px; }
+  #preview-area { min-height: 300px; }
+  #file-info { margin-top: 1rem; font-size: 0.9rem; color: #555; }
+  #preview-area img, #preview-area canvas { max-width: 100%; height: auto; border: 1px solid #ddd; }
+  #preview-area table { width: 100%; border-collapse: collapse; margin-top:1rem; }
+  #preview-area table, #preview-area th, #preview-area td { border: 1px solid #ccc; }
+  #preview-area th, #preview-area td { padding: 0.5rem; text-align: left; }
+  pre { white-space: pre-wrap; word-wrap: break-word; background: #f8f8f8; padding:0.5rem; border:1px solid #ddd; overflow:auto; }
+</style>
+
+<script>
+// Inisialisasi worker untuk PDF.js
+pdfjsLib.GlobalWorkerOptions.workerSrc = "https://mozilla.github.io/pdf.js/build/pdf.worker.js";
+
+const dropArea = document.getElementById('drop-area');
+const fileInput = document.getElementById('file-input');
+const fileListElem = document.getElementById('file-list');
+const previewArea = document.getElementById('preview-area');
+const fileInfo = document.getElementById('file-info');
+
+// Event Drag & Drop
+['dragenter', 'dragover'].forEach(evt => {
+  dropArea.addEventListener(evt, e => {
+    e.preventDefault(); e.stopPropagation();
+    dropArea.classList.add('hover');
+  }, false);
+});
+['dragleave', 'drop'].forEach(evt => {
+  dropArea.addEventListener(evt, e => {
+    e.preventDefault(); e.stopPropagation();
+    dropArea.classList.remove('hover');
+  }, false);
+});
+dropArea.addEventListener('drop', e => {
+  const files = e.dataTransfer.files;
+  handleFiles(files);
+});
+
+// Klik/Keyboard pada drop area membuka file dialog
+dropArea.addEventListener('click', () => fileInput.click());
+dropArea.addEventListener('keydown', e => {
+  if (e.key === 'Enter' || e.key === ' ') {
+    fileInput.click(); e.preventDefault();
+  }
+});
+fileInput.addEventListener('change', () => {
+  handleFiles(fileInput.files);
+  fileInput.value = '';
+});
+
+// Tombol Contoh (Demo)
+// Contoh PDF (fetch PDF dummy dari W3C)
+document.getElementById('sample-pdf').addEventListener('click', () => {
+  fetch('https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf')
+    .then(res => res.blob())
+    .then(blob => {
+      const sampleFile = new File([blob], 'contoh.pdf', {type: 'application/pdf'});
+      handleFiles([sampleFile]);
+    }).catch(err => alert('Gagal memuat contoh PDF.'));
+});
+// Contoh CSV (buat dari teks CSV sederhana)
+document.getElementById('sample-excel').addEventListener('click', () => {
+  const csvText = "Nama,Usia,Asal\\nJoko,30,Jakarta\\nSari,25,Bandung";
+  const blob = new Blob([csvText], {type: 'text/csv'});
+  const sampleFile = new File([blob], 'contoh.csv', {type: 'text/csv'});
+  handleFiles([sampleFile]);
+});
+// Contoh Gambar (fetch placeholder image)
+document.getElementById('sample-image').addEventListener('click', () => {
+  fetch('https://via.placeholder.com/300.png?text=Sample')
+    .then(res => res.blob())
+    .then(blob => {
+      const sampleFile = new File([blob], 'sample.png', {type: 'image/png'});
+      handleFiles([sampleFile]);
+    }).catch(err => alert('Gagal memuat contoh gambar.'));
+});
+// Contoh Teks (fetch raw markdown gist)
+document.getElementById('sample-text').addEventListener('click', () => {
+  fetch('https://gist.githubusercontent.com/rt2zz/e0a1d6ab2682d2c47746950b84c0b6ee/raw/83b8b4814c3417111b9b9bef86a552608506603e/markdown-sample.md')
+    .then(res => res.text())
+    .then(text => {
+      const blob = new Blob([text], {type: 'text/plain'});
+      const sampleFile = new File([blob], 'sample.md', {type: 'text/markdown'});
+      handleFiles([sampleFile]);
+    }).catch(err => alert('Gagal memuat contoh teks.'));
+});
+
+// Menyimpan dan menampilkan daftar file
+const files = [];
+function handleFiles(fileList) {
+  for (let file of fileList) {
+    addFile(file);
+  }
+  // Jika belum ada yang terpilih, pilih file pertama
+  if (files.length > 0 && !currentFile) {
+    selectFile(0);
+  }
+}
+function addFile(file) {
+  files.push(file);
+  const li = document.createElement('li');
+  const btn = document.createElement('button');
+  btn.textContent = file.name;
+  btn.addEventListener('click', () => {
+    const index = files.indexOf(file);
+    selectFile(index);
+  });
+  li.appendChild(btn);
+  fileListElem.appendChild(li);
+}
+let currentFile = null;
+function selectFile(index) {
+  currentFile = files[index];
+  // Tandai aktif di daftar
+  fileListElem.querySelectorAll('button').forEach((b,i) => {
+    b.classList.toggle('active', i === index);
+  });
+  previewArea.innerHTML = '';
+  fileInfo.innerHTML = '';
+  // Tampilkan info file
+  const info = `<strong>Name:</strong> ${currentFile.name}<br>
+                  <strong>Type:</strong> ${currentFile.type || 'Unknown'}<br>
+                  <strong>Size:</strong> ${(currentFile.size/1024).toFixed(1)} KB`;
+  fileInfo.innerHTML = info;
+  // Pratinjau berdasarkan ekstensi/tipe
+  const name = currentFile.name.toLowerCase();
+  if (name.endsWith('.pdf')) {
+    previewPDF(currentFile);
+  } else if (name.match(/\\.(xlsx|xls|csv)$/)) {
+    previewExcel(currentFile);
+  } else if (currentFile.type.startsWith('image')) {
+    previewImage(currentFile);
+  } else if (name.match(/\\.(txt|md|json|html)$/) || currentFile.type.startsWith('text')) {
+    previewText(currentFile);
+  } else {
+    previewArea.textContent = 'Tidak ada preview untuk tipe file ini.';
+  }
+}
+
+// Fungsi preview PDF (menggunakan PDF.js)
+function previewPDF(file) {
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const pdfData = new Uint8Array(e.target.result);
+    pdfjsLib.getDocument({data: pdfData}).promise.then(pdf => {
+      return pdf.getPage(1);
+    }).then(page => {
+      const viewport = page.getViewport({ scale: 1.5 });
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d');
+      const outputScale = window.devicePixelRatio;
+      canvas.width = Math.floor(viewport.width * outputScale);
+      canvas.height = Math.floor(viewport.height * outputScale);
+      canvas.style.width = Math.floor(viewport.width) + 'px';
+      canvas.style.height = Math.floor(viewport.height) + 'px';
+      const transform = outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : null;
+      const renderContext = { canvasContext: context, transform, viewport };
+      page.render(renderContext);
+      previewArea.appendChild(canvas);
+    }).catch(err => {
+      previewArea.textContent = 'Gagal memuat PDF: ' + err.message;
+    });
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+// Fungsi preview Excel/CSV (menggunakan SheetJS)
+function previewExcel(file) {
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    let data = new Uint8Array(e.target.result);
+    try {
+      let workbook = XLSX.read(data, {type: 'array'});
+      const sheetName = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      const html = XLSX.utils.sheet_to_html(sheet);
+      previewArea.innerHTML = html;
+    } catch (err) {
+      previewArea.textContent = 'Gagal memuat spreadsheet: ' + err;
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+// Fungsi preview Gambar
+function previewImage(file) {
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const img = document.createElement('img');
+    img.src = e.target.result;
+    img.alt = file.name;
+    previewArea.appendChild(img);
+  };
+  reader.readAsDataURL(file);
+}
+
+// Fungsi preview Teks (termasuk JSON/Md)
+function previewText(file) {
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    let content = e.target.result;
+    // Coba format JSON agar lebih rapi
+    if (file.name.toLowerCase().endsWith('.json')) {
+      try {
+        const obj = JSON.parse(content);
+        content = JSON.stringify(obj, null, 2);
+      } catch (err) { }
+    }
+    const pre = document.createElement('pre');
+    pre.textContent = content;
+    previewArea.appendChild(pre);
+  };
+  reader.readAsText(file);
+}
+</script>
+
+</body>
+</html>
